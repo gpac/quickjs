@@ -144,7 +144,7 @@ static inline int clz32(unsigned int a)
 #if defined(_MSC_VER)
     unsigned long ret = 0;
     _BitScanReverse(&ret, a);
-    return (int)ret;
+	return 31 - ret;
 #else
     return __builtin_clz(a);
 #endif
@@ -462,16 +462,49 @@ static inline double uint64_as_float64(uint64_t u64)
     return u.d;
 }
 
+
+//taken from QuickJS-NG, original function is not protable due to 0x1p1008
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <math.h>
+#define INF INFINITY
+#define NEG_INF -INFINITY
+
+static inline double fromfp16(uint16_t v) {
+	double d, s;
+	int e;
+	if ((v & 0x7C00) == 0x7C00) {
+		d = (v & 0x3FF) ? NAN : INFINITY;
+	}
+	else {
+		d = (v & 0x3FF) / 1024.;
+		e = (v & 0x7C00) >> 10;
+		if (e == 0) {
+			e = -14;
+		}
+		else {
+			d += 1;
+			e -= 15;
+		}
+		d = scalbn(d, e);
+	}
+	s = (v & 0x8000) ? -1.0 : 1.0;
+	return d * s;
+}
+#else
+
 static inline double fromfp16(uint16_t v)
 {
-    double d;
-    uint32_t v1;
-    v1 = v & 0x7fff;
-    if (unlikely(v1 >= 0x7c00))
-        v1 += 0x1f8000; /* NaN or infinity */
-    d = uint64_as_float64(((uint64_t)(v >> 15) << 63) | ((uint64_t)v1 << (52 - 10)));
-    return d * 0x1p1008;
+	double d;
+	uint32_t v1;
+	v1 = v & 0x7fff;
+	if (unlikely(v1 >= 0x7c00))
+		v1 += 0x1f8000; /* NaN or infinity */
+	d = uint64_as_float64(((uint64_t)(v >> 15) << 63) | ((uint64_t)v1 << (52 - 10)));
+	return d * 0x1p1008;
 }
+
+#endif
+
 
 static inline uint16_t tofp16(double d)
 {

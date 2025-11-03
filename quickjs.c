@@ -8096,8 +8096,12 @@ static int JS_CheckBrand(JSContext *ctx, JSValueConst obj, JSValueConst func)
         return -1;
     }
     p = JS_VALUE_GET_OBJ(obj);
-    prs = find_own_property(&pr, p, js_symbol_to_atom(ctx, (JSValue)brand));
-    return (prs != NULL);
+#if !defined(_MSC_VER)
+	prs = find_own_property(&pr, p, js_symbol_to_atom(ctx, (JSValue)brand));
+#else
+	prs = find_own_property(&pr, p, js_symbol_to_atom(ctx, brand));
+#endif
+	return (prs != NULL);
 }
 
 static uint32_t js_string_obj_get_length(JSContext *ctx,
@@ -10620,11 +10624,11 @@ void *JS_GetAnyOpaque(JSValueConst obj, JSClassID *class_id)
 {
     JSObject *p;
     if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT) {
-        if (class_id) *class_id = 0;
+        *class_id = 0;
         return NULL;
     }
     p = JS_VALUE_GET_OBJ(obj);
-    if (class_id) *class_id = p->class_id;
+    *class_id = p->class_id;
     return p->u.opaque;
 }
 
@@ -12396,8 +12400,12 @@ static JSValue js_atof(JSContext *ctx, const char *str, const char **pp,
             (atod_type == ATOD_TYPE_FLOAT64) &&
             strstart(p, "Infinity", &p)) {
 
-            double d = 1.0 / 0.0;
-            if (is_neg)
+#if defined(_MSC_VER) && !defined(__clang__)
+			double d = INFINITY;
+#else
+			double d = 1.0 / 0.0;
+#endif
+			if (is_neg)
                 d = -d;
             val = JS_NewFloat64(ctx, d);
             goto done;
@@ -12792,7 +12800,7 @@ static int JS_ToInt64SatFree(JSContext *ctx, int64_t *pres, JSValue val)
             } else {
                 if (d < INT64_MIN)
                     *pres = INT64_MIN;
-                else if (d >= 0x1p63) /* must use INT64_MAX + 1 because INT64_MAX cannot be exactly represented as a double */
+                else if (d >= 0x8000000000000000ULL /*0x1p63*/) /* must use INT64_MAX + 1 because INT64_MAX cannot be exactly represented as a double */
                     *pres = INT64_MAX;
                 else
                     *pres = (int64_t)d;
@@ -13279,7 +13287,11 @@ static void js_puts(JSPrintValueState *s, const char *str)
     s->write_func(s->write_opaque, str, strlen(str));
 }
 
-static void __attribute__((format(printf, 2, 3))) js_printf(JSPrintValueState *s, const char *fmt, ...)
+static
+#if !defined(_MSC_VER)
+__attribute__((format(printf, 2, 3)))
+#endif
+void js_printf(JSPrintValueState *s, const char *fmt, ...)
 {
     va_list ap;
     char buf[256];
@@ -16901,8 +16913,12 @@ static JSValue js_call_c_function(JSContext *ctx, JSValueConst func_obj,
     rt->current_stack_frame = sf;
     ctx = p->u.cfunc.realm; /* change the current realm */
     sf->js_mode = 0;
-    sf->cur_func = (JSValue)func_obj;
-    sf->arg_count = argc;
+#if defined(_MSC_VER)
+	sf->cur_func = func_obj;
+#else
+	sf->cur_func = (JSValue)func_obj;
+#endif
+	sf->arg_count = argc;
     arg_buf = argv;
 
     if (unlikely(argc < arg_count)) {
@@ -21363,7 +21379,11 @@ static int js_parse_error_v(JSParseState *s, const uint8_t *ptr, const char *fmt
     return -1;
 }
 
-static __attribute__((format(printf, 3, 4))) int js_parse_error_pos(JSParseState *s, const uint8_t *ptr, const char *fmt, ...)
+static
+#if !defined(_MSC_VER)
+__attribute__((format(printf, 3, 4)))
+#endif
+int js_parse_error_pos(JSParseState *s, const uint8_t *ptr, const char *fmt, ...)
 {
     va_list ap;
     int ret;
@@ -21374,7 +21394,11 @@ static __attribute__((format(printf, 3, 4))) int js_parse_error_pos(JSParseState
     return ret;
 }
 
-static __attribute__((format(printf, 2, 3))) int js_parse_error(JSParseState *s, const char *fmt, ...)
+static
+#if !defined(_MSC_VER)
+__attribute__((format(printf, 2, 3)))
+#endif
+int js_parse_error(JSParseState *s, const char *fmt, ...)
 {
     va_list ap;
     int ret;
@@ -22422,8 +22446,12 @@ static int json_parse_number(JSParseState *s, const uint8_t **pp)
     if (!is_digit(*p)) {
         if (s->ext_json) {
             if (strstart((const char *)p, "Infinity", (const char **)&p)) {
-                d = 1.0 / 0.0;
-                if (*p_start == '-')
+#if defined(_MSC_VER) && !defined(__clang__)
+				d = INFINITY;
+#else
+				d = 1.0 / 0.0;
+#endif
+				if (*p_start == '-')
                     d = -d;
                 goto done;
             } else if (strstart((const char *)p, "NaN", (const char **)&p)) {
@@ -49927,7 +49955,11 @@ static JSValue js_weakref_new(JSContext *ctx, JSValueConst val)
     } else {
         assert(JS_IsUndefined(val));
     }
-    return (JSValue)val;
+#if defined(_MSC_VER) && !defined(__clang__)
+	return val;
+#else
+	return (JSValue)val;
+#endif
 }
 
 #define MAGIC_SET (1 << 0)
@@ -50057,7 +50089,11 @@ static JSValue map_normalize_key(JSContext *ctx, JSValue key)
 
 static JSValueConst map_normalize_key_const(JSContext *ctx, JSValueConst key)
 {
-    return (JSValueConst)map_normalize_key(ctx, (JSValue)key);
+#if defined(_MSC_VER) && !defined(__clang__)
+	return map_normalize_key(ctx, key);
+#else
+	return (JSValueConst)map_normalize_key(ctx, (JSValue)key);
+#endif
 }
 
 /* hash multipliers, same as the Linux kernel (see Knuth vol 3,
@@ -50835,7 +50871,7 @@ static int get_set_record(JSContext *ctx, JSValueConst obj,
         }
         if (d < INT64_MIN)
             size = INT64_MIN;
-        else if (d >= 0x1p63) /* must use INT64_MAX + 1 because INT64_MAX cannot be exactly represented as a double */
+        else if (d >= 0x8000000000000000ULL /*0x1p63*/) /* must use INT64_MAX + 1 because INT64_MAX cannot be exactly represented as a double */
             size = INT64_MAX;
         else
             size = (int64_t)d;
@@ -52636,8 +52672,12 @@ static JSValue js_async_from_sync_iterator_unwrap_func_create(JSContext *ctx,
 {
     JSValueConst func_data[1];
 
-    func_data[0] = (JSValueConst)JS_NewBool(ctx, done);
-    return JS_NewCFunctionData(ctx, js_async_from_sync_iterator_unwrap,
+#if defined(_MSC_VER) && !defined(__clang__)
+	func_data[0] = JS_NewBool(ctx, done);
+#else
+	func_data[0] = (JSValueConst)JS_NewBool(ctx, done);
+#endif
+	return JS_NewCFunctionData(ctx, js_async_from_sync_iterator_unwrap,
                                1, 0, 1, func_data);
 }
 
@@ -53380,7 +53420,7 @@ static double set_date_fields(double fields[minimum_length(7)], int is_local) {
 
     /* adjust for local time and clip */
     if (is_local) {
-        int64_t ti = tv < INT64_MIN ? INT64_MIN : tv >= 0x1p63 ? INT64_MAX : (int64_t)tv;
+        int64_t ti = tv < INT64_MIN ? INT64_MIN : (tv >= 0x8000000000000000ULL/*0x1p63*/) ? INT64_MAX : (int64_t)tv;
         tv += getTimezoneOffset(ti) * 60000;
     }
     return time_clip(tv);
@@ -56258,7 +56298,7 @@ static JSValue js_typed_array_indexOf(JSContext *ctx, JSValueConst this_val,
     } else
     if (tag == JS_TAG_FLOAT64) {
         d = JS_VALUE_GET_FLOAT64(argv[0]);
-        if (d >= INT64_MIN && d < 0x1p63) {
+        if (d >= INT64_MIN && d < 0x8000000000000000ULL /*0x1p63*/) {
             v64 = d;
             is_int = (v64 == d);
         }
@@ -58141,7 +58181,7 @@ static struct list_head js_atomics_waiter_list =
 #include <mach/mach.h>
 #endif
 
-#if defined(__aarch64__)
+#if defined(__aarch64__) && !defined GPAC_CONFIG_IOS
 static inline void cpu_pause(void)
 {
     asm volatile("yield" ::: "memory");

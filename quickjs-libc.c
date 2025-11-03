@@ -124,6 +124,7 @@ typedef SSIZE_T ssize_t;
 /* enable the os.Worker API. It relies on POSIX threads */
 #define USE_WORKER
 
+#endif
 
 #ifdef USE_WORKER
 #include <gpac/thread.h>
@@ -678,8 +679,6 @@ int js_module_set_import_meta(JSContext *ctx, JSValueConst func_val,
 }
 
 
-#ifndef GPAC_DISABLE_QJS_LIBC
-
 static int json_module_init(JSContext *ctx, JSModuleDef *m)
 {
     JSValue val;
@@ -701,6 +700,9 @@ JSModuleDef *create_json_module(JSContext *ctx, const char *module_name, JSValue
     JS_SetModulePrivateValue(ctx, m, val);
     return m;
 }
+
+#ifndef GPAC_DISABLE_QJS_LIBC
+
 
 /* in order to conform with the specification, only the keys should be
    tested and not the associated values. */
@@ -733,6 +735,7 @@ int js_module_check_attributes(JSContext *ctx, void *opaque,
     JS_FreePropertyEnum(ctx, tab, len);
     return ret;
 }
+#endif
 
 /* return > 0 if the attributes indicate a JSON module */
 int js_module_test_json(JSContext *ctx, JSValueConst attributes)
@@ -762,6 +765,8 @@ int js_module_test_json(JSContext *ctx, JSValueConst attributes)
     JS_FreeCString(ctx, cstr);
     return res;
 }
+
+#ifndef GPAC_DISABLE_QJS_LIBC
 
 #ifndef GPAC_HAS_QJS
 
@@ -2225,8 +2230,13 @@ static int64_t get_time_ms(void)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
 }
+static int64_t get_time_ns(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
 
-/* CHECKME
 #elif defined(_WIN32) && defined(_MSC_VER)
 //more portable, but does not work if the date is updated
 static int64_t get_time_ms(void)
@@ -2235,16 +2245,12 @@ static int64_t get_time_ms(void)
 
 	_ftime(&tb);
 	return (int64_t)tb.time * 1000 + (tb.millitm);
-
 }
-*/
-
 static int64_t get_time_ns(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+	return gf_sys_clock_high_res() * 1000;
 }
+
 #else
 /* more portable, but does not work if the date is updated */
 static int64_t get_time_ms(void)
@@ -2560,8 +2566,10 @@ static int js_os_poll(JSContext *ctx)
             }
         }
     } else {
-        min_delay = -1;
-    }
+		//min_delay = -1;
+		//we need to exit - max 1sec wait
+		min_delay = 1000;
+	}
 
     count = 0;
     list_for_each(el, &ts->os_rw_handlers) {
@@ -2575,7 +2583,7 @@ static int js_os_poll(JSContext *ctx)
 
     list_for_each(el, &ts->port_list) {
         JSWorkerMessageHandler *port = list_entry(el, JSWorkerMessageHandler, link);
-        if (JS_IsNull(port->on_message_func))
+		if (JS_IsNull(port->on_message_func))
             continue;
         handles[count++] = port->recv_pipe->waker.handle;
         if (count == (int)countof(handles))
@@ -2609,12 +2617,17 @@ static int js_os_poll(JSContext *ctx)
                 }
             }
         }
-    } else {
-        Sleep(min_delay);
     }
- done:
+
+	//do not block if main thread !
+	if (!ts->recv_pipe || ts->terminated) {
+		return -1;
+	}
+
+done:
     return 0;
 }
+
 
 #else
 
@@ -2732,6 +2745,11 @@ static int js_os_poll(JSContext *ctx)
             }
         }
     }
+
+	//do not block if main thread !
+    else if (!ts->recv_pipe || ts->terminated) {
+		return -1;
+	}
  done:
     return 0;
 }
@@ -3730,6 +3748,14 @@ static JSValue js_os_waitpid(JSContext *ctx, JSValueConst this_val, int argc, JS
 	return obj;
 }
 
+/* getpid() -> pid */
+static JSValue js_os_getpid(JSContext *ctx, JSValueConst this_val,
+	int argc, JSValueConst *argv)
+{
+	return JS_NewInt32(ctx, GetCurrentProcessId());
+}
+
+
 /* kill(pid, sig) */
 static JSValue js_os_kill(JSContext *ctx, JSValueConst this_val,
 	int argc, JSValueConst *argv)
@@ -3834,6 +3860,7 @@ typedef struct {
     char *basename; /* module base name */
     JSWorkerMessagePipe *recv_pipe, *send_pipe;
     int strip_flags;
+    JSWorkerData *worker;
 } WorkerFuncArgs;
 
 typedef struct {
@@ -3900,10 +3927,6 @@ static JSWorkerMessagePipe *js_new_message_pipe(void)
 	char mxName[100];
 	sprintf(mxName, "Worker%pMx", ps);
 	ps->mutex = gf_mx_new(mxName);
-/* CHECKME
-    ps->read_fd = pipe_fds[0];
-    ps->write_fd = pipe_fds[1];
-*/
     return ps;
 }
 
@@ -3942,12 +3965,8 @@ static void js_free_message_pipe(JSWorkerMessagePipe *ps)
             js_free_message(msg);
         }
 
-/* CHECKME
-        close(ps->read_fd);
-        close(ps->write_fd);
-*/
-        gf_mx_del(ps->mutex);
         js_waker_close(&ps->waker);
+        gf_mx_del(ps->mutex);
         free(ps);
     }
 }
@@ -3990,7 +4009,7 @@ static unsigned int worker_func(void *opaque)
 {
     WorkerFuncArgs *args = opaque;
     JSRuntime *rt;
-	//JSWorkerData *worker;
+	JSWorkerData *worker;
     JSThreadState *ts;
     JSContext *ctx;
     JSValue val;
@@ -4009,10 +4028,9 @@ static unsigned int worker_func(void *opaque)
     ts = JS_GetRuntimeOpaque(rt);
     ts->recv_pipe = args->recv_pipe;
     ts->send_pipe = args->send_pipe;
-/* CHECKME
+
 	worker = args->worker;
 	worker->ts = ts;
-*/
 
     /* function pointer to avoid linking the whole JS_NewContext() if
        not needed */
@@ -4041,10 +4059,10 @@ static unsigned int worker_func(void *opaque)
     JS_FreeValue(ctx, val);
 
 	js_std_loop(ctx);
-/* CHECKME
+
 	worker->ts = NULL;
 	worker->msg_handler = NULL;
-*/
+
     JS_FreeContext(ctx);
     //do not free JSThreadState yet, it is used to unlink ports in worker finalizer
     js_std_free_handlers_ex(rt, 1);
@@ -4139,13 +4157,13 @@ static JSValue js_worker_ctor(JSContext *ctx, JSValueConst new_target,
     if (JS_IsException(obj))
         goto fail;
 
-    JSWorkerData *worker = JS_GetOpaque(obj, js_worker_class_id);
-    worker->th = gf_th_new("gf_js_worker");
-    if (!worker->th) {
+    args->worker = JS_GetOpaque(obj, js_worker_class_id);
+    args->worker->th = gf_th_new("gf_js_worker");
+    if (!args->worker->th) {
         goto oom_fail;
     }
 
-	ret = gf_th_run(worker->th, worker_func, args);
+	ret = gf_th_run(args->worker->th, worker_func, args);
     if (ret != 0) {
         JS_ThrowTypeError(ctx, "could not create worker");
         goto fail;
@@ -4251,7 +4269,7 @@ static JSValue js_worker_set_onmessage(JSContext *ctx, JSValueConst this_val,
     port = worker->msg_handler;
     if (JS_IsNull(func)) {
         if (port) {
-            js_free_port(rt, port);
+			js_free_port(rt, port);
             worker->msg_handler = NULL;
         }
     } else {
@@ -4801,6 +4819,5 @@ void js_std_eval_binary_json_module(JSContext *ctx,
         exit(1);
     }
 }
-#endif
 
 #endif //GPAC_DISABLE_QJS_LIBC
