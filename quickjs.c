@@ -70,17 +70,16 @@
 #define CONFIG_PRINTF_RNDN
 #endif
 
+#include <gpac/tools.h>
+
 /* define to include Atomics.* operations which depend on the OS
    threads */
 #if !defined(EMSCRIPTEN) && !defined(_MSC_VER) && !defined(GPAC_CONFIG_ANDROID) && !defined(__MINGW32__) && !defined(__CYGWIN__)
 #define CONFIG_ATOMICS
 #endif
 
-//no stack limit in GPAC doesn't work with multithreaded context switch
-#if defined(GPAC_QJS_STACK_CHECK)
 /* enable stack limitation */
 #define CONFIG_STACK_CHECK
-#endif
 
 
 /* dump object free */
@@ -124,7 +123,7 @@
 #include <errno.h>
 #endif
 
-#define CONFIG_VERSION "2020-11-08-rc2"
+#define CONFIG_VERSION "2025-09-13"
 
 enum {
     /* classid tag        */    /* union usage   | properties */
@@ -16815,7 +16814,7 @@ static int js_op_define_class(JSContext *ctx, JSValue *sp,
             goto fail;
     }
 
-    /* the constructor property must be first. It can be overriden by
+    /* the constructor property must be first. It can be overridden by
        computed property names */
     if (JS_DefinePropertyValue(ctx, proto, JS_ATOM_constructor,
                                JS_DupValue(ctx, ctor),
